@@ -34,8 +34,9 @@ func Update(client container.Client, params types.UpdateParams) (types.Report, e
 
 	for i, targetContainer := range containers {
 		stale, newestImage, err := client.IsContainerStale(targetContainer, params)
-		shouldUpdate := stale && !params.NoRestart && !targetContainer.IsMonitorOnly(params)
-		if err == nil && shouldUpdate {
+		oldEnough := client.OldEnoughImage(targetContainer, newestImage)
+		shouldUpdate := stale && !params.NoRestart && !params.MonitorOnly && !targetContainer.IsMonitorOnly(params) && oldEnough
+		if err == nil && shouldUpdate && oldEnough {
 			// Check to make sure we have all the necessary information for recreating the container
 			err = targetContainer.VerifyConfiguration()
 			// If the image information is incomplete and trace logging is enabled, log it for further diagnosis
@@ -58,6 +59,7 @@ func Update(client container.Client, params types.UpdateParams) (types.Report, e
 			progress.AddScanned(targetContainer, newestImage)
 		}
 		containers[i].SetStale(stale)
+		containers[i].OldEnoughImage = oldEnough
 
 		if stale {
 			staleCount++
@@ -73,7 +75,7 @@ func Update(client container.Client, params types.UpdateParams) (types.Report, e
 
 	var containersToUpdate []types.Container
 	for _, c := range containers {
-		if !c.IsMonitorOnly(params) {
+		if !c.IsMonitorOnly(params) && c.OldEnoughImage {
 			containersToUpdate = append(containersToUpdate, c)
 			progress.MarkForUpdate(c.ID())
 		}

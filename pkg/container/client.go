@@ -33,7 +33,8 @@ type Client interface {
 	IsContainerStale(t.Container, t.UpdateParams) (stale bool, latestImage t.ImageID, err error)
 	ExecuteCommand(containerID t.ContainerID, command string, timeout int) (SkipUpdate bool, err error)
 	RemoveImageByID(t.ImageID) error
-	WarnOnHeadPullFailed(container t.Container) bool
+	WarnOnHeadPullFailed(container Container) bool
+	OldEnoughImage(container Container, latestImage t.ImageID) bool
 }
 
 // NewClient returns a new Client instance which can be used to interact with
@@ -62,6 +63,7 @@ type ClientOptions struct {
 	ReviveStopped     bool
 	IncludeRestarting bool
 	WarnOnHeadFailed  WarningStrategy
+	UpdateDelay		  time.Duration
 }
 
 // WarningStrategy is a value determining when to show warnings
@@ -345,6 +347,39 @@ func (client dockerClient) HasNewImage(ctx context.Context, container t.Containe
 
 	log.Infof("Found new %s image (%s)", imageName, newImageID.ShortID())
 	return true, newImageID, nil
+}
+
+func (client dockerClient) OldEnoughImage(container Container, latestImage t.ImageID) bool {
+	ctx := context.Background()
+
+	updateDelay := client.updateDelay
+	if containerDelay, ok := container.getLabelValue(updateDelayLabel); ok {
+		labelDelay, err := time.ParseDuration(containerDelay)
+
+		// Should we return false or true here?
+		if err != nil {
+			log.Debugf("Update Delay label is invalid for %s", container.Name())
+			return false
+		}
+		updateDelay = labelDelay
+	}
+
+	newImageInfo, _, err := client.api.ImageInspectWithRaw(ctx, string(latestImage))
+	if err != nil {
+		return true
+	}
+
+	created, err := time.Parse(time.RFC3339, newImageInfo.Created)
+
+	// Not sure if we should return true here?
+	if err != nil {
+		log.Debugf("Unable to parse created time date for %s", container.Name())
+		return true
+	}
+
+	durationSinceCreated := time.Until(created)
+
+	return durationSinceCreated > updateDelay
 }
 
 // PullImage pulls the latest image for the supplied container, optionally skipping if it's digest can be confirmed
